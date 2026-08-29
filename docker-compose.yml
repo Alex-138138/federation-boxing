@@ -1,0 +1,50 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: boxing
+      POSTGRES_USER: boxing
+      POSTGRES_PASSWORD: boxing
+    volumes:
+      - boxing_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U boxing -d boxing"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  backend:
+    build: ./backend
+    environment:
+      APP_ENV: dev
+      DATABASE_URL: postgresql+psycopg://boxing:boxing@db:5432/boxing
+      JWT_SECRET: full-build-demo-secret
+      ACCESS_TOKEN_MINUTES: 60
+      VAPID_PUBLIC_KEY: ""
+      VAPID_PRIVATE_KEY: ""
+      VAPID_SUBJECT: mailto:admin@example.org
+      CORS_ORIGINS: http://localhost
+    depends_on:
+      db:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+
+  frontend:
+    build: ./frontend
+    depends_on:
+      - backend
+
+  nginx:
+    image: nginx:1.27-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      - frontend
+      - backend
+
+volumes:
+  boxing_pgdata:
