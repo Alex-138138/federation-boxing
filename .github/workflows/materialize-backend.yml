@@ -1,0 +1,34 @@
+name: Materialize backend sources
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/materialize-backend.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  materialize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Restore archived Full Build sources
+        run: python3 bootstrap.py
+      - name: Re-apply Full Build 2.0 tracked backend overrides
+        run: git checkout HEAD -- backend
+      - name: Commit complete backend tree
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -f backend
+          if git diff --cached --quiet; then
+            echo "Backend already materialized"
+          else
+            git commit -m "Materialize complete backend source tree"
+            git push origin HEAD:main
+          fi
