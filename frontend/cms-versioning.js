@@ -1,0 +1,5 @@
+window.CmsVersions={
+ async list(key){return req(`/admin/content/pages/${key}/versions`)},
+ async show(key,hostId='cmsVersions'){const host=document.getElementById(hostId);if(!host)return;try{const rows=await this.list(key);host.innerHTML=rows.map(v=>`<div class="list-item"><div><b>Версия #${v.id}</b><div class="muted">${v.created_at||''}</div></div><button class="chip" onclick="CmsVersions.restore('${key}',${v.id})">Восстановить</button></div>`).join('')||'<div class="empty">Версий пока нет</div>'}catch(e){host.innerHTML='<div class="empty">Не удалось загрузить версии</div>'}},
+ async restore(key,id){const rows=await this.list(key);const v=rows.find(x=>x.id===id);if(!v)return;CmsEditor.pageKey=key;CmsEditor.blocks=JSON.parse(JSON.stringify(v.snapshot?.blocks||[]));CmsEditor.draw();alert('Версия загружена в редактор. Нажмите «Сохранить», чтобы создать новую версию.')}
+};
