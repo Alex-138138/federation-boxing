@@ -1,17 +1,11 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+"""Compatibility exports for Full Build 2.1 routes.
 
-from app.core.config import settings
+Database ownership remains in app.db.*.  Some newer admin/CMS routes import
+app.core.db, so this module deliberately re-exports the canonical objects
+instead of creating a second SQLAlchemy engine/Base registry.
+"""
 
+from app.db.base import Base
+from app.db.session import SessionLocal, engine, get_db, ready
 
-engine = create_engine(settings.database_url, pool_pre_ping=True)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
-
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+__all__ = ["Base", "SessionLocal", "engine", "get_db", "ready"]
