@@ -1,0 +1,1 @@
+window.SessionGuard={clear(){localStorage.removeItem('token');localStorage.removeItem('activeRole')},expired(){this.clear();alert('Сессия завершена. Войдите снова.');location.reload()},install(){const old=window.fetch;window.fetch=async(...a)=>{const r=await old(...a);if(r.status===401&&localStorage.getItem('token'))this.expired();return r}}};SessionGuard.install();
