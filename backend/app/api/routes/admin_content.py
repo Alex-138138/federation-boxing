@@ -1,26 +1,56 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from sqlalchemy import select
 from sqlalchemy.orm import Session
-from app.core.db import get_db
-from app.core.deps import require_roles
-from app.models import models as m
 
-router=APIRouter(prefix='/admin/content',tags=['admin-content'])
-admin_dep=require_roles('admin')
+from app.db.session import get_db
+from app.models import Page, PageVersion
+from app.services.security import CurrentUser, require_roles
 
-class ContentPayload(BaseModel):
-    key:str
-    title:str=''
-    snapshot:dict={}
+router = APIRouter(prefix="/admin/content", tags=["admin-content"])
 
-@router.get('/pages')
-def pages(db:Session=Depends(get_db), user=Depends(admin_dep)):
-    rows=db.query(m.CmsPage).order_by(m.CmsPage.key).all()
-    return [{'id':x.id,'key':x.key,'title':x.title,'published_version_id':x.published_version_id} for x in rows]
 
-@router.get('/pages/{key}/versions')
-def versions(key:str,db:Session=Depends(get_db),user=Depends(admin_dep)):
-    page=db.query(m.CmsPage).filter(m.CmsPage.key==key).first()
-    if not page: raise HTTPException(404,'page_not_found')
-    rows=db.query(m.CmsVersion).filter(m.CmsVersion.page_id==page.id).order_by(m.CmsVersion.id.desc()).all()
-    return [{'id':x.id,'created_at':x.created_at,'snapshot':x.snapshot} for x in rows]
+@router.get("/pages")
+def pages(
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(require_roles("admin")),
+):
+    rows = db.scalars(select(Page).order_by(Page.page_key)).all()
+    return [
+        {
+            "id": page.id,
+            "key": page.page_key,
+            "page_key": page.page_key,
+            "title": page.title,
+            "published_version_id": page.published_version_id,
+        }
+        for page in rows
+    ]
+
+
+@router.get("/pages/{key}/versions")
+def versions(
+    key: str,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(require_roles("admin")),
+):
+    page = db.scalar(select(Page).where(Page.page_key == key))
+    if not page:
+        raise HTTPException(status_code=404, detail="page_not_found")
+
+    rows = db.scalars(
+        select(PageVersion)
+        .where(PageVersion.page_id == page.id)
+        .order_by(PageVersion.version_no.desc())
+    ).all()
+
+    return [
+        {
+            "id": version.id,
+            "version_no": version.version_no,
+            "created_at": version.created_at,
+            "published_at": version.published_at,
+            "snapshot": version.snapshot,
+            "is_published": version.id == page.published_version_id,
+        }
+        for version in rows
+    ]
