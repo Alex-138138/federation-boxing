@@ -1,10 +1,18 @@
 from fastapi import APIRouter, Response
+
 from app.db.session import ready
-router=APIRouter(tags=["system"])
+
+router = APIRouter(tags=["system"])
+
+
 @router.get("/health")
-def health(): return {"status":"ok","version":"Full Build 2.0"}
+def health():
+    return {"status": "ok", "version": "Full Build 2.1"}
+
+
 @router.get("/ready")
-def readiness(response:Response):
+def readiness(response: Response):
     if not ready():
-        response.status_code=503; return {"status":"not_ready"}
-    return {"status":"ready"}
+        response.status_code = 503
+        return {"status": "not_ready", "database": "unavailable"}
+    return {"status": "ready", "database": "ok"}
