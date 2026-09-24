@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import AuditLog, Group, Hall, JoinCode, TrainingSchedule, User, UserRole
+from app.models import AuditLog, Group, GroupMembership, Hall, JoinCode, TrainingSchedule, User, UserRole
 from app.services.security import CurrentUser, require_roles
 
 router = APIRouter(prefix="/admin/manage", tags=["admin-manage"])
@@ -173,3 +173,23 @@ def delete_schedule(group_id: str, schedule_id: str, c: CurrentUser = Depends(re
     row=db.get(TrainingSchedule,schedule_id)
     if not row or row.group_id!=group_id: raise HTTPException(404,"Schedule not found")
     db.delete(row); db.add(AuditLog(actor_user_id=c.id,action="schedule.delete",entity_type="training_schedule",entity_id=schedule_id,metadata_json={"group_id":group_id})); db.commit(); return {"ok":True}
+
+@router.post("/groups/{group_id}/archive")
+def archive_group(group_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    g=db.get(Group,group_id)
+    if not g: raise HTTPException(404,"Group not found")
+    for row in db.scalars(select(GroupMembership).where(GroupMembership.group_id==group_id,GroupMembership.status=="active")).all(): row.status="archived"
+    for row in db.scalars(select(JoinCode).where(JoinCode.group_id==group_id,JoinCode.active==True)).all(): row.active=False
+    for row in db.scalars(select(TrainingSchedule).where(TrainingSchedule.group_id==group_id,TrainingSchedule.active==True)).all(): row.active=False
+    db.add(AuditLog(actor_user_id=c.id,action="group.archive",entity_type="group",entity_id=g.id)); db.commit(); return {"ok":True}
+
+@router.post("/halls/{hall_id}/archive")
+def archive_hall(hall_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    h=db.get(Hall,hall_id)
+    if not h: raise HTTPException(404,"Hall not found")
+    active_groups=db.scalars(select(Group).where(Group.hall_id==hall_id)).all()
+    for g in active_groups:
+        for row in db.scalars(select(GroupMembership).where(GroupMembership.group_id==g.id,GroupMembership.status=="active")).all(): row.status="archived"
+        for row in db.scalars(select(JoinCode).where(JoinCode.group_id==g.id,JoinCode.active==True)).all(): row.active=False
+        for row in db.scalars(select(TrainingSchedule).where(TrainingSchedule.group_id==g.id,TrainingSchedule.active==True)).all(): row.active=False
+    db.add(AuditLog(actor_user_id=c.id,action="hall.archive",entity_type="hall",entity_id=h.id,metadata_json={"groups":len(active_groups)})); db.commit(); return {"ok":True}
