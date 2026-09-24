@@ -100,6 +100,9 @@ def submit_child(
     )
     if not invite:
         raise HTTPException(404, "Join code not found")
+    existing = db.scalar(select(Application).where(Application.applicant_user_id==c.id,Application.group_id==invite.group_id,Application.status=="submitted"))
+    if existing:
+        return {"id":existing.id,"status":existing.status,"duplicate":True}
 
     snapshot = x.model_dump(mode="json")
     application = Application(
