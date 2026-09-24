@@ -31,6 +31,16 @@ class ScheduleIn(BaseModel):
     end_time: time
     location: str | None = Field(default=None, max_length=255)
 
+class HallUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    address: str = Field(min_length=1, max_length=500)
+    phone: str | None = Field(default=None, max_length=32)
+
+class GroupUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    hall_id: str
+    trainer_user_id: str
+
 
 @router.post("/halls")
 def create_hall(
@@ -138,3 +148,28 @@ def add_schedule(
     )
     db.commit()
     return {"ok": True, "id": s.id}
+
+@router.put("/halls/{hall_id}")
+def update_hall(hall_id: str, x: HallUpdate, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    h = db.get(Hall, hall_id)
+    if not h: raise HTTPException(404, "Hall not found")
+    h.name=x.name.strip(); h.address=x.address.strip(); h.phone=x.phone
+    db.add(AuditLog(actor_user_id=c.id,action="hall.update",entity_type="hall",entity_id=h.id,metadata_json={"name":h.name}))
+    db.commit(); return {"ok":True}
+
+@router.put("/groups/{group_id}")
+def update_group(group_id: str, x: GroupUpdate, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    g=db.get(Group,group_id)
+    if not g: raise HTTPException(404,"Group not found")
+    if not db.get(Hall,x.hall_id): raise HTTPException(404,"Hall not found")
+    role=db.scalar(select(UserRole).where(UserRole.user_id==x.trainer_user_id,UserRole.role=="trainer"))
+    if not role: raise HTTPException(400,"Selected user does not have trainer role")
+    g.name=x.name.strip(); g.hall_id=x.hall_id; g.trainer_user_id=x.trainer_user_id
+    db.add(AuditLog(actor_user_id=c.id,action="group.update",entity_type="group",entity_id=g.id,metadata_json={"hall_id":g.hall_id,"trainer_user_id":g.trainer_user_id}))
+    db.commit(); return {"ok":True}
+
+@router.delete("/groups/{group_id}/schedule/{schedule_id}")
+def delete_schedule(group_id: str, schedule_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    row=db.get(TrainingSchedule,schedule_id)
+    if not row or row.group_id!=group_id: raise HTTPException(404,"Schedule not found")
+    db.delete(row); db.add(AuditLog(actor_user_id=c.id,action="schedule.delete",entity_type="training_schedule",entity_id=schedule_id,metadata_json={"group_id":group_id})); db.commit(); return {"ok":True}
