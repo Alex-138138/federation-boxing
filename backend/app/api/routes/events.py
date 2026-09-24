@@ -20,6 +20,13 @@ class EventIn(BaseModel):
     audience_role:str|None=None
     remind_minutes:int=Field(default=60,ge=0,le=10080)
 
+class EventUpdate(BaseModel):
+    title:str=Field(min_length=1,max_length=255)
+    body:str=Field(min_length=1,max_length=2000)
+    starts_at:datetime
+    audience_role:str|None=None
+    remind_minutes:int=Field(default=60,ge=0,le=10080)
+
 EVENTS=[]
 SENT_EVENT_REMINDERS=set()
 SENT_TRAINING_REMINDERS=set()
@@ -95,3 +102,23 @@ def delete_event(event_id:str,c:CurrentUser=Depends(require_roles("admin")),db:S
 @router.get("/admin/all")
 def admin_events(c:CurrentUser=Depends(require_roles("admin"))):
     return sorted(EVENTS,key=lambda x:x["starts_at"])
+
+@router.put("/admin/{event_id}")
+def update_event(event_id:str,x:EventUpdate,c:CurrentUser=Depends(require_roles("admin")),db:Session=Depends(get_db)):
+    for e in EVENTS:
+        if e["id"]==event_id:
+            before={"title":e["title"],"starts_at":e["starts_at"].isoformat()}
+            e.update(title=x.title.strip(),body=x.body.strip(),starts_at=x.starts_at,audience_role=x.audience_role,remind_minutes=x.remind_minutes)
+            for key in list(SENT_EVENT_REMINDERS):
+                if key[1]==event_id:SENT_EVENT_REMINDERS.discard(key)
+            db.add(AuditLog(actor_user_id=c.id,action="event.update",entity_type="event",entity_id=event_id,metadata_json={"before":before,"after":{"title":e["title"],"starts_at":e["starts_at"].isoformat()}}));db.commit();return e
+    raise HTTPException(404,"Event not found")
+
+@router.get("/public/news")
+def public_news():
+    return sorted([x for x in EVENTS if x["event_type"]=="news"],key=lambda x:x["starts_at"],reverse=True)[:20]
+
+@router.get("/public/competitions")
+def public_competitions():
+    now=datetime.now(timezone.utc)
+    return sorted([x for x in EVENTS if x["event_type"]=="competition" and x["starts_at"]>=now],key=lambda x:x["starts_at"])[:20]
