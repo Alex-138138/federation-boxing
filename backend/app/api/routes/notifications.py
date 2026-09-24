@@ -50,3 +50,15 @@ def read_notification(
         notification.read_at = datetime.now(timezone.utc)
         db.commit()
     return {"ok": True, "read_at": notification.read_at}
+
+@router.post("/read-all")
+def read_all_notifications(c: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows=db.scalars(select(Notification).where(Notification.user_id==c.id,Notification.read_at.is_(None))).all()
+    now=datetime.now(timezone.utc)
+    for item in rows: item.read_at=now
+    db.commit(); return {"ok":True,"updated":len(rows)}
+
+@router.get("/unread-count")
+def unread_count(c: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows=db.scalars(select(Notification).where(Notification.user_id==c.id,Notification.read_at.is_(None))).all()
+    return {"count":len(rows)}
