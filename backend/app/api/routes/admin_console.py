@@ -4,7 +4,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Application, AuditLog, Group, Hall, Message, Person, User, UserRole
+from app.models import Application, AuditLog, Group, Hall, Message, Notification, Person, User, UserRole
+from app.services.push import push_to_user
 from app.services.security import CurrentUser, require_roles
 
 router = APIRouter(prefix="/admin/console", tags=["admin-console"])
@@ -16,6 +17,12 @@ class StatusUpdate(BaseModel):
 
 class RoleUpdate(BaseModel):
     roles: list[str]
+
+class BroadcastIn(BaseModel):
+    title: str
+    body: str
+    event_type: str = "federation_news"
+    roles: list[str] | None = None
 
 
 @router.get("/users")
@@ -177,3 +184,21 @@ def messages(
         }
         for m in rows
     ]
+
+@router.post("/broadcast")
+def broadcast(x: BroadcastIn, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    allowed={"federation_news","federation_holiday","birthday","training_reminder"}
+    if x.event_type not in allowed: raise HTTPException(400,"Invalid event type")
+    title=x.title.strip(); body=x.body.strip()
+    if not title or not body: raise HTTPException(400,"Title and body required")
+    users=db.scalars(select(User).where(User.status=="active")).all()
+    roles=set(x.roles or [])
+    sent_users=0; push_count=0
+    for u in users:
+        if roles:
+            user_roles=set(db.scalars(select(UserRole.role).where(UserRole.user_id==u.id)).all())
+            if not user_roles.intersection(roles): continue
+        db.add(Notification(user_id=u.id,event_type=x.event_type,title=title,body=body,payload={"url":"/","event_type":x.event_type}))
+        db.flush(); push_count+=push_to_user(db,u.id,title,body,url="/",tag=x.event_type); sent_users+=1
+    db.add(AuditLog(actor_user_id=c.id,action="admin.broadcast",entity_type="notification",metadata_json={"event_type":x.event_type,"users":sent_users,"push":push_count,"roles":sorted(roles)}))
+    db.commit(); return {"ok":True,"users":sent_users,"push":push_count}
