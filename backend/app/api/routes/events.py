@@ -42,10 +42,16 @@ def public_events():
     now=datetime.now(timezone.utc)
     return sorted([x for x in EVENTS if x["starts_at"]>=now],key=lambda x:x["starts_at"])[:50]
 
+@router.get("/public/{event_id}")
+def public_event(event_id:str):
+    for e in EVENTS:
+        if e["id"]==event_id:return e
+    raise HTTPException(404,"Event not found")
+
 @router.post("/admin")
 def create_event(x:EventIn,c:CurrentUser=Depends(require_roles("admin")),db:Session=Depends(get_db)):
     if x.event_type not in {"federation_event","competition","holiday","news"}: raise HTTPException(400,"Invalid event type")
-    row={"id":f"evt-{len(EVENTS)+1}","title":x.title.strip(),"body":x.body.strip(),"event_type":x.event_type,"starts_at":x.starts_at,"audience_role":x.audience_role,"remind_minutes":x.remind_minutes}
+    row={"id":f"evt-{int(datetime.now(timezone.utc).timestamp()*1000)}","title":x.title.strip(),"body":x.body.strip(),"event_type":x.event_type,"starts_at":x.starts_at,"audience_role":x.audience_role,"remind_minutes":x.remind_minutes}
     EVENTS.append(row)
     db.add(AuditLog(actor_user_id=c.id,action="event.create",entity_type="event",entity_id=row["id"],metadata_json={"type":x.event_type,"starts_at":x.starts_at.isoformat()}));db.commit();return row
 
@@ -122,3 +128,14 @@ def public_news():
 def public_competitions():
     now=datetime.now(timezone.utc)
     return sorted([x for x in EVENTS if x["event_type"]=="competition" and x["starts_at"]>=now],key=lambda x:x["starts_at"])[:20]
+
+@router.get("/public/holidays")
+def public_holidays():
+    now=datetime.now(timezone.utc)
+    return sorted([x for x in EVENTS if x["event_type"]=="holiday" and x["starts_at"]>=now],key=lambda x:x["starts_at"])[:20]
+
+@router.get("/public/feed")
+def public_feed():
+    now=datetime.now(timezone.utc)
+    rows=sorted(EVENTS,key=lambda x:x["starts_at"],reverse=True)
+    return {"upcoming":[x for x in rows if x["starts_at"]>=now][:20],"latest":[x for x in rows if x["event_type"]=="news"][:20]}
