@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 from app.db.session import get_db
-from app.models import Hall, Group, Person, User
+from app.models import Hall, Group, Person, TrainingSchedule, User
 
 router = APIRouter(prefix="/directory", tags=["directory"])
 
@@ -32,4 +32,8 @@ def trainers(db: Session = Depends(get_db)):
 @router.get("/groups")
 def groups(db: Session = Depends(get_db)):
     rows = db.scalars(select(Group).order_by(Group.name)).all()
-    return [{"id": g.id, "name": g.name, "hall_id": g.hall_id, "trainer_user_id": g.trainer_user_id} for g in rows]
+    out=[]
+    for g in rows:
+        schedule=db.scalars(select(TrainingSchedule).where(TrainingSchedule.group_id==g.id).order_by(TrainingSchedule.weekday,TrainingSchedule.start_time)).all()
+        out.append({"id":g.id,"name":g.name,"hall_id":g.hall_id,"trainer_user_id":g.trainer_user_id,"schedule":[{"id":x.id,"weekday":x.weekday,"start_time":x.start_time,"end_time":x.end_time,"location":x.location} for x in schedule]})
+    return out
