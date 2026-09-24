@@ -1,12 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models import Achievement, Athlete, Attendance, Group, GroupMembership, Hall, Person, RatingHistory
+from app.models import Achievement, Athlete, Attendance, AuditLog, Group, GroupMembership, Hall, Person, RatingHistory
 from app.services.security import CurrentUser, require_roles
 
 router = APIRouter(prefix="/admin/sport", tags=["admin-sport"])
+
+class AthleteTransferIn(BaseModel):
+    group_id: str
+
+class AthleteStatusIn(BaseModel):
+    status: str
 
 
 @router.get("/athletes")
@@ -101,3 +108,28 @@ def athlete_history(
             for item in attendance
         ],
     }
+
+@router.post("/athletes/{athlete_id}/transfer")
+def transfer_athlete(athlete_id: str, x: AthleteTransferIn, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    athlete=db.get(Athlete,athlete_id)
+    target=db.get(Group,x.group_id)
+    if not athlete: raise HTTPException(404,"Athlete not found")
+    if not target: raise HTTPException(404,"Target group not found")
+    current=db.scalars(select(GroupMembership).where(GroupMembership.athlete_id==athlete_id,GroupMembership.status=="active")).all()
+    if any(m.group_id==x.group_id for m in current): return {"ok":True,"unchanged":True}
+    previous=[m.group_id for m in current]
+    for m in current: m.status="archived"
+    db.add(GroupMembership(group_id=x.group_id,athlete_id=athlete_id,status="active"))
+    db.add(AuditLog(actor_user_id=c.id,action="athlete.transfer",entity_type="athlete",entity_id=athlete_id,metadata_json={"from_groups":previous,"to_group":x.group_id}))
+    db.commit(); return {"ok":True,"from_groups":previous,"to_group":x.group_id}
+
+@router.put("/athletes/{athlete_id}/status")
+def set_athlete_status(athlete_id: str, x: AthleteStatusIn, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    if x.status not in {"active","inactive","archived"}: raise HTTPException(400,"Invalid athlete status")
+    athlete=db.get(Athlete,athlete_id)
+    if not athlete: raise HTTPException(404,"Athlete not found")
+    athlete.status=x.status
+    if x.status!="active":
+        for m in db.scalars(select(GroupMembership).where(GroupMembership.athlete_id==athlete_id,GroupMembership.status=="active")).all(): m.status="archived"
+    db.add(AuditLog(actor_user_id=c.id,action="athlete.status",entity_type="athlete",entity_id=athlete_id,metadata_json={"status":x.status}))
+    db.commit(); return {"ok":True,"status":athlete.status}
