@@ -98,3 +98,22 @@ def mine(
         }
         for receipt, message in rows
     ]
+
+@router.post("/{message_id}/read")
+def read_message(message_id: str, c: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    receipt=db.scalar(select(MessageReceipt).where(MessageReceipt.message_id==message_id,MessageReceipt.user_id==c.id))
+    if not receipt: raise HTTPException(404,"Message not found")
+    if receipt.read_at is None: receipt.read_at=datetime.now(timezone.utc); db.commit()
+    return {"ok":True,"read_at":receipt.read_at}
+
+@router.post("/read-all")
+def read_all_messages(c: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows=db.scalars(select(MessageReceipt).where(MessageReceipt.user_id==c.id,MessageReceipt.read_at.is_(None))).all()
+    now=datetime.now(timezone.utc)
+    for row in rows: row.read_at=now
+    db.commit(); return {"ok":True,"updated":len(rows)}
+
+@router.get("/unread-count")
+def unread_messages(c: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db)):
+    rows=db.scalars(select(MessageReceipt).where(MessageReceipt.user_id==c.id,MessageReceipt.read_at.is_(None))).all()
+    return {"count":len(rows)}
