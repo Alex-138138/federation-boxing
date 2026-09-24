@@ -21,6 +21,9 @@ class EventIn(BaseModel):
     remind_minutes:int=Field(default=60,ge=0,le=10080)
 
 EVENTS=[]
+SENT_EVENT_REMINDERS=set()
+SENT_TRAINING_REMINDERS=set()
+SENT_BIRTHDAYS=set()
 
 def _notify(db,user_id,event_type,title,body,url="/"):
     db.add(Notification(user_id=user_id,type=event_type,title=title,body=body))
@@ -47,8 +50,9 @@ def run_birthdays(c:CurrentUser=Depends(require_roles("admin")),db:Session=Depen
         if p.birth_date.month==today.month and p.birth_date.day==today.day:
             title="С днём рождения!"
             body=f"{p.first_name}, Федерация бокса поздравляет Вас с днём рождения!"
-            exists=db.scalar(select(Notification).where(Notification.user_id==p.user_id,Notification.type=="birthday",Notification.title==title))
-            if not exists: push+=_notify(db,p.user_id,"birthday",title,body);sent+=1
+            dedupe=(p.user_id,today.isoformat())
+            if dedupe not in SENT_BIRTHDAYS:
+                push+=_notify(db,p.user_id,"birthday",title,body);sent+=1;SENT_BIRTHDAYS.add(dedupe)
     db.add(AuditLog(actor_user_id=c.id,action="events.birthdays.run",entity_type="notification",metadata_json={"sent":sent,"push":push}));db.commit();return {"sent":sent,"push":push}
 
 @router.post("/admin/run-training-reminders")
@@ -62,7 +66,9 @@ def run_training_reminders(c:CurrentUser=Depends(require_roles("admin")),db:Sess
             for m in memberships:
                 athlete=db.get(Athlete,m.athlete_id);person=db.get(Person,athlete.person_id) if athlete else None
                 if person and person.user_id:
-                    body=f"Сегодня тренировка в {str(sc.start_time)[:5]}. {sc.location or ''}".strip();push+=_notify(db,person.user_id,"training_reminder","Напоминание о тренировке",body);sent+=1
+                    dedupe=(person.user_id,sc.id,now.date().isoformat())
+                    if dedupe in SENT_TRAINING_REMINDERS: continue
+                    body=f"Сегодня тренировка в {str(sc.start_time)[:5]}. {sc.location or ''}".strip();push+=_notify(db,person.user_id,"training_reminder","Напоминание о тренировке",body);sent+=1;SENT_TRAINING_REMINDERS.add(dedupe)
     db.add(AuditLog(actor_user_id=c.id,action="events.training_reminders.run",entity_type="notification",metadata_json={"sent":sent,"push":push}));db.commit();return {"sent":sent,"push":push}
 
 @router.post("/admin/run-event-reminders")
@@ -74,5 +80,18 @@ def run_event_reminders(c:CurrentUser=Depends(require_roles("admin")),db:Session
             users=db.scalars(select(User).where(User.status=="active")).all()
             for u in users:
                 if e["audience_role"] and not db.scalar(select(UserRole).where(UserRole.user_id==u.id,UserRole.role==e["audience_role"])): continue
-                push+=_notify(db,u.id,"event_reminder",e["title"],e["body"]);sent+=1
+                dedupe=(u.id,e["id"])
+                if dedupe in SENT_EVENT_REMINDERS: continue
+                push+=_notify(db,u.id,"event_reminder",e["title"],e["body"]);sent+=1;SENT_EVENT_REMINDERS.add(dedupe)
     db.add(AuditLog(actor_user_id=c.id,action="events.reminders.run",entity_type="event",metadata_json={"sent":sent,"push":push}));db.commit();return {"sent":sent,"push":push}
+
+@router.delete("/admin/{event_id}")
+def delete_event(event_id:str,c:CurrentUser=Depends(require_roles("admin")),db:Session=Depends(get_db)):
+    for i,e in enumerate(EVENTS):
+        if e["id"]==event_id:
+            removed=EVENTS.pop(i);db.add(AuditLog(actor_user_id=c.id,action="event.delete",entity_type="event",entity_id=event_id,metadata_json={"title":removed["title"]}));db.commit();return {"ok":True}
+    raise HTTPException(404,"Event not found")
+
+@router.get("/admin/all")
+def admin_events(c:CurrentUser=Depends(require_roles("admin"))):
+    return sorted(EVENTS,key=lambda x:x["starts_at"])
