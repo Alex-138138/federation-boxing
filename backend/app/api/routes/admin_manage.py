@@ -193,3 +193,32 @@ def archive_hall(hall_id: str, c: CurrentUser = Depends(require_roles("admin")),
         for row in db.scalars(select(JoinCode).where(JoinCode.group_id==g.id,JoinCode.active==True)).all(): row.active=False
         for row in db.scalars(select(TrainingSchedule).where(TrainingSchedule.group_id==g.id,TrainingSchedule.active==True)).all(): row.active=False
     db.add(AuditLog(actor_user_id=c.id,action="hall.archive",entity_type="hall",entity_id=h.id,metadata_json={"groups":len(active_groups)})); db.commit(); return {"ok":True}
+
+@router.put("/groups/{group_id}/schedule/{schedule_id}")
+def update_schedule(group_id: str, schedule_id: str, x: ScheduleIn, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    row=db.get(TrainingSchedule,schedule_id)
+    if not row or row.group_id!=group_id: raise HTTPException(404,"Schedule not found")
+    if x.end_time<=x.start_time: raise HTTPException(400,"end_time must be after start_time")
+    row.weekday=x.weekday; row.start_time=x.start_time; row.end_time=x.end_time; row.location=x.location; row.active=True
+    db.add(AuditLog(actor_user_id=c.id,action="schedule.update",entity_type="training_schedule",entity_id=row.id,metadata_json={"group_id":group_id,"weekday":x.weekday}))
+    db.commit(); return {"ok":True}
+
+@router.post("/groups/{group_id}/join-code/rotate")
+def rotate_join_code(group_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    g=db.get(Group,group_id)
+    if not g: raise HTTPException(404,"Group not found")
+    for row in db.scalars(select(JoinCode).where(JoinCode.group_id==group_id,JoinCode.active==True)).all(): row.active=False
+    code="BOX-"+secrets.token_hex(4).upper()
+    db.add(JoinCode(code=code,hall_id=g.hall_id,trainer_user_id=g.trainer_user_id,group_id=g.id,active=True))
+    db.add(AuditLog(actor_user_id=c.id,action="join_code.rotate",entity_type="group",entity_id=g.id,metadata_json={"code":code}))
+    db.commit(); return {"ok":True,"join_code":code}
+
+@router.post("/groups/{group_id}/restore")
+def restore_group(group_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    g=db.get(Group,group_id)
+    if not g: raise HTTPException(404,"Group not found")
+    for row in db.scalars(select(TrainingSchedule).where(TrainingSchedule.group_id==group_id)).all(): row.active=True
+    active=db.scalar(select(JoinCode).where(JoinCode.group_id==group_id,JoinCode.active==True))
+    if not active:
+        code="BOX-"+secrets.token_hex(4).upper(); db.add(JoinCode(code=code,hall_id=g.hall_id,trainer_user_id=g.trainer_user_id,group_id=g.id,active=True))
+    db.add(AuditLog(actor_user_id=c.id,action="group.restore",entity_type="group",entity_id=g.id)); db.commit(); return {"ok":True}
