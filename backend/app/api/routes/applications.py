@@ -62,6 +62,17 @@ class ChildIn(BaseModel):
 class RejectIn(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
+class AdultIn(BaseModel):
+    join_code: str = Field(min_length=1,max_length=64)
+    first_name: str = Field(min_length=1,max_length=100)
+    last_name: str = Field(min_length=1,max_length=100)
+    middle_name: str | None = Field(default=None,max_length=100)
+    birth_date: date
+    gender: str | None = Field(default=None,max_length=32)
+    phone: str | None = Field(default=None,max_length=32)
+    address: str | None = Field(default=None,max_length=500)
+    notes: str | None = Field(default=None,max_length=2000)
+
 
 def _clean(value: str | None) -> str | None:
     if value is None:
@@ -113,6 +124,23 @@ def submit_child(
     return {"id": application.id, "status": application.status}
 
 
+@router.post("/adult")
+def submit_adult(x: AdultIn,c: CurrentUser=Depends(get_current_user),db: Session=Depends(get_db)):
+    if x.birth_date>date.today(): raise HTTPException(400,"Birth date cannot be in the future")
+    if age_on(x.birth_date)<18: raise HTTPException(400,"Adult flow is only for users 18+")
+    invite=db.scalar(select(JoinCode).where(JoinCode.code==x.join_code.strip(),JoinCode.active.is_(True)))
+    if not invite: raise HTTPException(404,"Join code not found")
+    existing=db.scalar(select(Application).where(Application.applicant_user_id==c.id,Application.group_id==invite.group_id,Application.status=="submitted"))
+    if existing: return {"id":existing.id,"status":existing.status,"duplicate":True}
+    snapshot=x.model_dump(mode="json");snapshot["application_type"]="adult"
+    app=Application(applicant_user_id=c.id,hall_id=invite.hall_id,trainer_user_id=invite.trainer_user_id,group_id=invite.group_id,snapshot=snapshot)
+    db.add(app);db.flush();db.add(AuditLog(actor_user_id=c.id,action="application.submit",entity_type="application",entity_id=app.id,metadata_json={"application_type":"adult"}));db.commit();return {"id":app.id,"status":app.status}
+
+@router.get("/mine")
+def my_applications(c:CurrentUser=Depends(get_current_user),db:Session=Depends(get_db)):
+    rows=db.scalars(select(Application).where(Application.applicant_user_id==c.id).order_by(Application.id.desc())).all()
+    return [{"id":a.id,"status":a.status,"group_id":a.group_id,"athlete_id":a.athlete_id,"rejection_reason":a.rejection_reason,"snapshot":a.snapshot} for a in rows]
+
 @router.get("/trainer")
 def trainer_apps(
     c: CurrentUser = Depends(require_roles("trainer", "admin")),
@@ -150,6 +178,16 @@ def approve(
         raise HTTPException(400, "Application already processed")
 
     snapshot = application.snapshot or {}
+    if snapshot.get("application_type")=="adult":
+        birth=date.fromisoformat(snapshot["birth_date"])
+        if age_on(birth)<18: raise HTTPException(400,"Adult flow is only for users 18+")
+        person=db.scalar(select(Person).where(Person.user_id==application.applicant_user_id))
+        if not person:
+            person=Person(user_id=application.applicant_user_id,first_name=snapshot["first_name"].strip(),last_name=snapshot["last_name"].strip(),middle_name=_clean(snapshot.get("middle_name")),birth_date=birth,gender=_clean(snapshot.get("gender")),phone=_clean(snapshot.get("phone")),address=_clean(snapshot.get("address")));db.add(person);db.flush()
+        athlete=db.scalar(select(Athlete).where(Athlete.person_id==person.id))
+        if not athlete: athlete=Athlete(person_id=person.id,rating_points=100);db.add(athlete);db.flush()
+        if application.group_id and not db.scalar(select(GroupMembership).where(GroupMembership.group_id==application.group_id,GroupMembership.athlete_id==athlete.id,GroupMembership.status=="active")): db.add(GroupMembership(group_id=application.group_id,athlete_id=athlete.id,status="active"))
+        application.status="approved";application.athlete_id=athlete.id;db.add(Notification(user_id=application.applicant_user_id,type="application_approved",title="Заявление одобрено",body="Вы добавлены в группу."));db.add(AuditLog(actor_user_id=c.id,action="application.approve",entity_type="application",entity_id=application.id,metadata_json={"athlete_id":athlete.id,"application_type":"adult"}));db.commit();return {"id":application.id,"status":application.status,"athlete_id":athlete.id}
     required = ("child_first_name", "child_last_name", "child_birth_date", "parent_first_name", "parent_last_name")
     if any(not snapshot.get(key) for key in required):
         raise HTTPException(400, "Application snapshot is incomplete")
