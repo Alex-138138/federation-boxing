@@ -1,3 +1,4 @@
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -149,15 +150,32 @@ def my_children(
         person = db.get(Person, athlete.person_id) if athlete else None
         if not athlete or not person:
             continue
+        membership = _active_membership(db, athlete.id)
+        group = db.get(Group, membership.group_id) if membership else None
+        hall = db.get(Hall, group.hall_id) if group else None
+        attendance_rows = db.scalars(select(Attendance).where(Attendance.athlete_id == athlete.id)).all()
+        present = sum(1 for row in attendance_rows if row.status == "present")
+        total = len(attendance_rows)
+        age = None
+        if person.birth_date:
+            today = date.today()
+            age = today.year - person.birth_date.year - ((today.month, today.day) < (person.birth_date.month, person.birth_date.day))
         out.append(
             {
                 "athlete_id": athlete.id,
-                "name": " ".join(
-                    part for part in (person.last_name, person.first_name, person.middle_name) if part
-                ),
+                "name": " ".join(part for part in (person.last_name, person.first_name, person.middle_name) if part),
+                "birth_date": str(person.birth_date) if person.birth_date else None,
+                "age": age,
+                "adult": age is not None and age >= 18,
+                "phone": person.phone,
                 "rating_points": athlete.rating_points,
+                "status": athlete.status,
                 "relationship": link.relationship,
                 "is_primary": link.is_primary,
+                "group": {"id": group.id, "name": group.name} if group else None,
+                "hall": {"id": hall.id, "name": hall.name, "address": hall.address, "phone": hall.phone} if hall else None,
+                "trainer": _trainer_info(db, group),
+                "attendance": {"present": present, "total": total, "percent": round(present * 100 / total) if total else None},
             }
         )
     return out
