@@ -12,4 +12,4 @@ def resolve(code: str, db: Session = Depends(get_db)):
     if not invite: raise HTTPException(404, "Join code not found")
     hall=db.get(Hall,invite.hall_id); group=db.get(Group,invite.group_id) if invite.group_id else None
     trainer=db.get(User,invite.trainer_user_id); trainer_person=db.scalar(select(Person).where(Person.user_id==invite.trainer_user_id))
-    return {"code":code,"hall":{"id":hall.id,"name":hall.name,"address":hall.address,"phone":hall.phone} if hall else None,"group":{"id":group.id,"name":group.name} if group else None,"trainer":{"name":f"{trainer_person.last_name} {trainer_person.first_name}" if trainer_person else "Тренер"} if trainer else None}
+    return {"valid":True,"code":code,"hall":{"id":hall.id,"name":hall.name,"address":hall.address,"phone":hall.phone} if hall else None,"group":{"id":group.id,"name":group.name} if group else None,"trainer":{"name":" ".join(x for x in [trainer_person.last_name,trainer_person.first_name,trainer_person.middle_name] if x)} if trainer and trainer_person else {"name":"Тренер"},"application_paths":{"child":"/applications/child","adult":"/applications/adult"}}
