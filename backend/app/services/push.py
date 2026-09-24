@@ -5,7 +5,7 @@ from pywebpush import webpush, WebPushException
 from app.core.config import settings
 from app.models import PushSubscription
 
-def push_to_user(db: Session, user_id: str, title: str, body: str):
+def push_to_user(db: Session, user_id: str, title: str, body: str, url: str = '/', tag: str = 'boxing-notification'):
     if not settings.vapid_private_key:
         return 0
     sent = 0
@@ -20,11 +20,15 @@ def push_to_user(db: Session, user_id: str, title: str, body: str):
         try:
             webpush(
                 subscription_info=sub,
-                data=json.dumps({"title": title, "body": body}, ensure_ascii=False),
+                data=json.dumps({"title": title, "body": body, "url": url, "tag": tag}, ensure_ascii=False),
                 vapid_private_key=settings.vapid_private_key,
                 vapid_claims={"sub": settings.vapid_subject},
             )
             sent += 1
-        except WebPushException:
-            pass
+        except WebPushException as exc:
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status in (404, 410):
+                row.active = False
+                db.flush()
+    db.commit()
     return sent
