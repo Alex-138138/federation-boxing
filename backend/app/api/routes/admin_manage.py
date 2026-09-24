@@ -164,8 +164,13 @@ def update_group(group_id: str, x: GroupUpdate, c: CurrentUser = Depends(require
     if not db.get(Hall,x.hall_id): raise HTTPException(404,"Hall not found")
     role=db.scalar(select(UserRole).where(UserRole.user_id==x.trainer_user_id,UserRole.role=="trainer"))
     if not role: raise HTTPException(400,"Selected user does not have trainer role")
+    old_trainer=g.trainer_user_id
     g.name=x.name.strip(); g.hall_id=x.hall_id; g.trainer_user_id=x.trainer_user_id
-    db.add(AuditLog(actor_user_id=c.id,action="group.update",entity_type="group",entity_id=g.id,metadata_json={"hall_id":g.hall_id,"trainer_user_id":g.trainer_user_id}))
+    if old_trainer!=g.trainer_user_id:
+        for code in db.scalars(select(JoinCode).where(JoinCode.group_id==g.id,JoinCode.active==True)).all():
+            code.trainer_user_id=g.trainer_user_id
+            code.hall_id=g.hall_id
+    db.add(AuditLog(actor_user_id=c.id,action="group.update",entity_type="group",entity_id=g.id,metadata_json={"hall_id":g.hall_id,"trainer_user_id":g.trainer_user_id,"previous_trainer_user_id":old_trainer}))
     db.commit(); return {"ok":True}
 
 @router.delete("/groups/{group_id}/schedule/{schedule_id}")
@@ -173,6 +178,19 @@ def delete_schedule(group_id: str, schedule_id: str, c: CurrentUser = Depends(re
     row=db.get(TrainingSchedule,schedule_id)
     if not row or row.group_id!=group_id: raise HTTPException(404,"Schedule not found")
     db.delete(row); db.add(AuditLog(actor_user_id=c.id,action="schedule.delete",entity_type="training_schedule",entity_id=schedule_id,metadata_json={"group_id":group_id})); db.commit(); return {"ok":True}
+
+@router.post("/groups/{group_id}/athletes/{athlete_id}/restore")
+def restore_membership(group_id: str, athlete_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
+    g=db.get(Group,group_id)
+    if not g: raise HTTPException(404,"Group not found")
+    current=db.scalars(select(GroupMembership).where(GroupMembership.athlete_id==athlete_id,GroupMembership.status=="active")).all()
+    previous=[m.group_id for m in current]
+    for m in current: m.status="archived"
+    old=db.scalar(select(GroupMembership).where(GroupMembership.group_id==group_id,GroupMembership.athlete_id==athlete_id).order_by(GroupMembership.id.desc()))
+    if old: old.status="active"
+    else: db.add(GroupMembership(group_id=group_id,athlete_id=athlete_id,status="active"))
+    db.add(AuditLog(actor_user_id=c.id,action="membership.restore",entity_type="athlete",entity_id=athlete_id,metadata_json={"from_groups":previous,"to_group":group_id}))
+    db.commit(); return {"ok":True}
 
 @router.post("/groups/{group_id}/archive")
 def archive_group(group_id: str, c: CurrentUser = Depends(require_roles("admin")), db: Session = Depends(get_db)):
